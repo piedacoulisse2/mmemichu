@@ -1,0 +1,130 @@
+
+- name: Ensure docker is installed
+  apt:
+    name: docker.io
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Ensure docker-compose is installed
+  apt:
+    name: docker-compose
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Pull the Elasticsearch Docker image
+  command:
+    cmd: docker pull docker.elastic.co/elasticsearch/elasticsearch:8.10.3
+
+- name: Remove /home/mmemichu/dataELK directory
+  file:
+    path: /home/mmemichu/dataELK
+    state: absent
+
+- name: Create directory for Elasticsearch data
+  file:
+    path: /home/mmemichu/dataELK
+    state: directory
+    owner: 1000
+    group: 1000
+    mode: '0777'
+
+- name: Ensure Elasticsearch container is removed
+  docker_container:
+    name: elasticsearch
+    state: absent
+
+- name: Ensure Kibana container is removed
+  docker_container:
+    name: kibana
+    state: absent
+
+
+- name: Ensure Docker network 'elastic' exists
+  docker_network:
+    name: elastic
+    state: present
+    
+
+
+- name: Run Elasticsearch container with custom settings
+  docker_container:
+    name: elasticsearch
+    network_mode: elastic
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.3
+    env:
+      network.host: "0.0.0.0"
+      #network.bind_host: "192.168.0.160"
+      discovery.type: single-node
+      ELASTIC_PASSWORD: "yourpassword"
+    ports:
+      - "9200:9200"
+    memory: "2g"
+    tty: yes
+    interactive: yes
+    restart_policy: always
+    state: started
+
+
+- name: Wait for 10 seconds
+  pause:
+    seconds: 15
+
+- name: Get Elasticsearch enrollment token
+  command: docker exec elasticsearch bin/elasticsearch-create-enrollment-token -s kibana
+  register: enrollment_token_result
+
+- set_fact:
+    enrollment_token: "{{ enrollment_token_result.stdout }}"
+
+
+- name: Pull the Kibana Docker image
+  command:
+    cmd: docker pull docker.elastic.co/kibana/kibana:8.10.3
+
+- name: Run Kibana container
+  docker_container:
+    name: kibana
+    network_mode: elastic
+    image: docker.elastic.co/kibana/kibana:8.10.3
+    env:
+      #ELASTICSEARCH_HOSTS: https://elasticsearch:9200
+      #ELASTICSEARCH_USERNAME: "kibana_system"
+      #ELASTICSEARCH_PASSWORD: "yourpassword"
+      
+      ELASTICSEARCH_SSL_VERIFICATIONMODE: none
+      #ELASTICSEARCH_ENROLLMENT_TOKEN: "{{ enrollment_token }}"
+      #NODE_OPTIONS: "--tls.rejectUnauthorized=false"  
+    links:
+      - elasticsearch
+    ports:
+      - "5601:5601"
+    restart_policy: always
+    state: started
+
+- name: Wait for 20 seconds
+  pause:
+    seconds: 20
+
+- name: Run kibana-setup with enrollment token
+  command:
+    cmd: "docker exec kibana bin/kibana-setup --enrollment-token {{ enrollment_token_result.stdout }}"
+  register: kibana_setup_result
+
+- name: Wait for 10 seconds
+  pause:
+    seconds: 10
+
+
+- name: Restart Kibana container
+  docker_container:
+    name: kibana
+    state: stopped
+
+- name: Wait for 10 seconds
+  pause:
+    seconds: 10
+
+- name: Restart Kibana container
+  docker_container:
+    name: kibana
+    state: started
